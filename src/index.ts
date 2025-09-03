@@ -2,12 +2,18 @@ import express from "express";
 import helmet from "helmet";
 import cors from "cors";
 import morgan from "morgan";
+import path from "path";
+import { fileURLToPath } from "url";
 import config from "./config";
 import prisma from "./database/db";
 import routes from "./routes";
 import { errorHandler } from "./samples/errorHandler";
 
 const app = express();
+
+// For __dirname (since ES modules don’t have it natively)
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
 
 // Middleware
 app.use(helmet()); // Security headers
@@ -21,20 +27,30 @@ async function checkDatabaseConnection() {
   try {
     await prisma.$connect();
     console.log("✅ Database connected successfully");
-    
+
     // Optional: Run database migrations
     // await prisma.$executeRaw`PRISMA MIGRATION COMMAND`;
-    
   } catch (error) {
     console.error("❌ Database connection error:", error);
     process.exit(1);
   }
 }
-app.get("/",(_req,res)=>{
-  res.send("hi from ajmal")
-})
-// Routes
+
+app.get("/", (_req, res) => {
+  res.send("hi from ajmal");
+});
+
+// API Routes
 app.use("/api", routes);
+
+// Serve React frontend
+const frontendPath = "/var/www/glomium/dca/dca-frontend/build";
+app.use(express.static(frontendPath));
+
+// Catch-all for React Router
+app.get("*", (_req, res) => {
+  res.sendFile(path.join(frontendPath, "index.html"));
+});
 
 // Error handling (must be after routes)
 app.use(errorHandler);
@@ -66,7 +82,6 @@ async function startServer() {
         process.exit(0);
       });
     });
-
   } catch (error) {
     console.error("❌ Server startup error:", error);
     await prisma.$disconnect();
