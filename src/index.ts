@@ -42,17 +42,7 @@ app.get("/", (_req, res) => {
 // API Routes
 app.use("/api", routes);
 
-// Serve React frontend
-const frontendBuildPath = "/var/www/glomium/dca/dca-frontend/build";
-
-// Serve static files
-app.use(express.static(frontendBuildPath));
-
-// Catch-all for React Router
-app.get("*", (_req, res) => {
-  res.sendFile(path.join(frontendBuildPath, "index.html"));
-});
-
+// Serve React frontend// Serve static files
 // Error handling (must be after routes)
 app.use(errorHandler);
 

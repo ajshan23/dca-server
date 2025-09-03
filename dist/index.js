@@ -7,11 +7,13 @@ const express_1 = __importDefault(require("express"));
 const helmet_1 = __importDefault(require("helmet"));
 const cors_1 = __importDefault(require("cors"));
 const morgan_1 = __importDefault(require("morgan"));
+const path_1 = __importDefault(require("path"));
 const config_1 = __importDefault(require("./config"));
 const db_1 = __importDefault(require("./database/db"));
 const routes_1 = __importDefault(require("./routes"));
 const errorHandler_1 = require("./samples/errorHandler");
 const app = (0, express_1.default)();
+// For __dirname (since ES modules don’t have it natively)
 // Middleware
 app.use((0, helmet_1.default)()); // Security headers
 app.use((0, cors_1.default)({ origin: "*", credentials: true })); // CORS configuration
@@ -34,8 +36,16 @@ async function checkDatabaseConnection() {
 app.get("/", (_req, res) => {
     res.send("hi from ajmal");
 });
-// Routes
+// API Routes
 app.use("/api", routes_1.default);
+// Serve React frontend
+const frontendBuildPath = "/var/www/glomium/dca/dca-frontend/build";
+// Serve static files
+app.use(express_1.default.static(frontendBuildPath));
+// Catch-all for React Router
+app.get("*", (_req, res) => {
+    res.sendFile(path_1.default.join(frontendBuildPath, "index.html"));
+});
 // Error handling (must be after routes)
 app.use(errorHandler_1.errorHandler);
 // Start server
