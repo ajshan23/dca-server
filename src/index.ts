@@ -3,7 +3,7 @@ import helmet from "helmet";
 import cors from "cors";
 import morgan from "morgan";
 import path from "path";
-import { fileURLToPath } from "url";
+
 import config from "./config";
 import prisma from "./database/db";
 import routes from "./routes";
@@ -12,8 +12,7 @@ import { errorHandler } from "./samples/errorHandler";
 const app = express();
 
 // For __dirname (since ES modules don’t have it natively)
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
+
 
 // Middleware
 app.use(helmet()); // Security headers
@@ -44,12 +43,14 @@ app.get("/", (_req, res) => {
 app.use("/api", routes);
 
 // Serve React frontend
-const frontendPath = "/var/www/glomium/dca/dca-frontend/build";
-app.use(express.static(frontendPath));
+const frontendBuildPath = "/var/www/glomium/dca/dca-frontend/build";
+
+// Serve static files
+app.use(express.static(frontendBuildPath));
 
 // Catch-all for React Router
 app.get("*", (_req, res) => {
-  res.sendFile(path.join(frontendPath, "index.html"));
+  res.sendFile(path.join(frontendBuildPath, "index.html"));
 });
 
 // Error handling (must be after routes)
