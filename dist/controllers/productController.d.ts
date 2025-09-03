@@ -1,0 +1,15 @@
+import { Request, Response } from "express";
+export declare function createProduct(req: Request, res: Response): Promise<void>;
+export declare function getAllProducts(req: Request, res: Response): Promise<void>;
+export declare function getProductById(req: Request, res: Response): Promise<void>;
+export declare function addStock(req: Request, res: Response): Promise<void>;
+export declare function updateInventoryItem(req: Request, res: Response): Promise<void>;
+export declare function getAvailableInventory(req: Request, res: Response): Promise<void>;
+export declare function deleteInventoryItem(req: Request, res: Response): Promise<void>;
+export declare function getStockTransactions(req: Request, res: Response): Promise<void>;
+export declare function generateInventoryQr(req: Request, res: Response): Promise<void>;
+export declare function updateProduct(req: Request, res: Response): Promise<void>;
+export declare function deleteProduct(req: Request, res: Response): Promise<void>;
+export declare function getAssignedProducts(_req: Request, res: Response): Promise<void>;
+export declare function getStockSummary(_req: Request, res: Response): Promise<void>;
+export declare function generateProductQr(req: Request, res: Response): Promise<void>;

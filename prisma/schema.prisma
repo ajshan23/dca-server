@@ -1,0 +1,183 @@
+datasource db {
+  provider = "mysql"
+  url      = env("DATABASE_URL")
+}
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+model User {
+  id             Int       @id @default(autoincrement())
+  username       String    @unique
+  passwordHash   String
+  role           String    @default("USER")
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+  deletedAt      DateTime?
+  assignments    ProductAssignment[]
+
+  @@map("users")
+}
+
+model Branch {
+  id        Int       @id @default(autoincrement())
+  name      String    @unique
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+  deletedAt DateTime?
+  products  Product[]
+  employees Employee[]
+
+  @@map("branches")
+}
+
+model Category {
+  id          Int       @id @default(autoincrement())
+  name        String    @unique
+  description String?
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+  deletedAt   DateTime?
+  products    Product[]
+
+  @@map("categories")
+}
+
+model Employee {
+  id           Int       @id @default(autoincrement())
+  empId        String    @unique
+  name         String
+  email        String?
+  department   String?
+  position     String?
+  branchId     Int?
+  branch       Branch?   @relation(fields: [branchId], references: [id])
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
+  deletedAt    DateTime?
+  assignments  ProductAssignment[]
+
+  @@map("employees")
+}
+
+model Department {
+  id          Int       @id @default(autoincrement())
+  name        String    @unique
+  description String?
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+  deletedAt   DateTime?
+  products    Product[]
+
+  @@map("departments")
+}
+
+// Modified Product model - now represents product templates/types
+model Product {
+  id               Int       @id @default(autoincrement())
+  name             String
+  model            String
+  categoryId       Int
+  category         Category  @relation(fields: [categoryId], references: [id])
+  branchId         Int
+  branch           Branch    @relation(fields: [branchId], references: [id])
+  departmentId     Int?
+  department       Department? @relation(fields: [departmentId], references: [id])
+  warrantyDuration Int?      // Warranty duration in months instead of specific date
+  complianceStatus Boolean   @default(false)
+  description      String?   // Renamed from notes for clarity
+  minStockLevel    Int       @default(0) // Minimum stock threshold
+  createdAt        DateTime  @default(now())
+  updatedAt        DateTime  @updatedAt
+  deletedAt        DateTime?
+  
+  // Relations
+  inventory        ProductInventory[]
+  assignments      ProductAssignment[]
+  stockAlerts      StockAlert[]
+
+  @@map("products")
+}
+
+// New model to handle individual product items/stock
+model ProductInventory {
+  id               Int       @id @default(autoincrement())
+  productId        Int
+  product          Product   @relation(fields: [productId], references: [id])
+  serialNumber     String?   @unique // Optional serial number for tracking
+  barcode          String?   @unique // Optional barcode
+  status           String    @default("AVAILABLE") // AVAILABLE, ASSIGNED, MAINTENANCE, DAMAGED, RETIRED
+  condition        String    @default("NEW") // NEW, GOOD, FAIR, POOR, DAMAGED
+  purchaseDate     DateTime?
+  purchasePrice    Decimal?  @db.Decimal(10,2)
+  warrantyExpiry   DateTime? // Individual warranty expiry
+  location         String?   // Storage location
+  notes            String?
+  createdAt        DateTime  @default(now())
+  updatedAt        DateTime  @updatedAt
+  deletedAt        DateTime?
+  
+  // Relations
+  assignments      ProductAssignment[]
+  transactions     StockTransaction[]
+
+  @@map("product_inventory")
+}
+
+// Updated ProductAssignment to work with inventory items
+model ProductAssignment {
+  id               Int       @id @default(autoincrement())
+  productId        Int       // Reference to product template
+  product          Product   @relation(fields: [productId], references: [id])
+  inventoryId      Int       // Reference to specific inventory item
+  inventory        ProductInventory @relation(fields: [inventoryId], references: [id])
+  employeeId       Int
+  employee         Employee  @relation(fields: [employeeId], references: [id])
+  assignedById     Int
+  assignedBy       User      @relation(fields: [assignedById], references: [id])
+  assignedAt       DateTime  @default(now())
+  returnedAt       DateTime?
+  expectedReturnAt DateTime?
+  status           String    @default("ASSIGNED") // ASSIGNED, RETURNED, OVERDUE
+  returnCondition  String?   // Condition when returned
+  notes            String?
+  deletedAt        DateTime?
+
+  // Ensure only one active assignment per inventory item
+  @@unique([inventoryId, returnedAt])
+
+  @@map("product_assignments")
+}
+
+// New model for stock transactions/movements
+model StockTransaction {
+  id           Int       @id @default(autoincrement())
+  inventoryId  Int
+  inventory    ProductInventory @relation(fields: [inventoryId], references: [id])
+  type         String    // IN, OUT, TRANSFER, ADJUSTMENT, DAMAGED, RETIRED
+  quantity     Int       @default(1) // For future batch operations
+  reason       String?
+  reference    String?   // Reference number (PO, Invoice, etc.)
+  userId       Int?      // User who performed the transaction
+  fromLocation String?
+  toLocation   String?
+  createdAt    DateTime  @default(now())
+  notes        String?
+  deletedAt    DateTime? // Add this line
+  @@map("stock_transactions")
+}
+
+// New model for stock alerts
+model StockAlert {
+  id          Int       @id @default(autoincrement())
+  productId   Int
+  product     Product   @relation(fields: [productId], references: [id])
+  alertType   String    // LOW_STOCK, OUT_OF_STOCK, EXPIRED_WARRANTY, MAINTENANCE_DUE
+  message     String
+  isRead      Boolean   @default(false)
+  createdAt   DateTime  @default(now())
+  readAt      DateTime?
+
+  @@map("stock_alerts")
+}
