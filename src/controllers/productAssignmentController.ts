@@ -2,6 +2,7 @@ import { Request, Response } from "express";
 import { AppError } from "../samples/errorHandler";
 import prisma from "../database/db";
 import { Prisma } from "@prisma/client";
+import QRCode from 'qrcode';
 
 export async function assignProduct(req: Request, res: Response) {
   const { productId, employeeId, inventoryId, expectedReturnAt, notes, autoSelect = true } = req.body;
@@ -656,5 +657,60 @@ export async function getAssignmentAnalytics(req: Request, res: Response) {
     res.json({ success: true, data: analytics });
   } catch (error) {
     throw new AppError("Failed to fetch assignment analytics", 500);
+  }
+}
+
+
+export async function generateAssignmentQr(req: Request, res: Response) {
+  try {
+    const { assignmentId } = req.params;
+
+    if (!assignmentId || isNaN(parseInt(assignmentId))) {
+      throw new Error("Invalid assignment ID");
+    }
+
+    const assignment = await prisma.productAssignment.findUnique({
+      where: { id: parseInt(assignmentId) },
+      include: {
+        product: true,
+        employee: true,
+        inventory: true
+      }
+    });
+
+    if (!assignment) throw new AppError("Assignment not found", 404);
+
+    const assignmentUrl = `${process.env.FRONTEND_URL}/product-public-view/${assignmentId}`;
+
+    const qrCode = await new Promise<string>((resolve, reject) => {
+      QRCode.toDataURL(assignmentUrl, {
+        errorCorrectionLevel: 'H',
+        width: 300,
+        margin: 1
+      }, (err, url) => {
+        if (err) return reject(err);
+        resolve(url);
+      });
+    });
+    console.log(qrCode);
+    
+    res.json({
+      success: true,
+      qrCode,
+      assignmentInfo: {
+        id: assignment.id,
+        productName: assignment.product.name,
+        employeeName: assignment.employee.name,
+        assignedAt: assignment.assignedAt,
+        expectedReturnAt: assignment.expectedReturnAt,
+        status: assignment.status
+      }
+    });
+  } catch (error) {
+    console.error('Assignment QR generation error:', error);
+    res.status(500).json({
+      success: false,
+      message: error instanceof Error ? error.message : 'Failed to generate QR code'
+    });
   }
 }

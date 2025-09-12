@@ -2,8 +2,6 @@ import express from "express";
 import helmet from "helmet";
 import cors from "cors";
 import morgan from "morgan";
-import path from "path";
-
 import config from "./config";
 import prisma from "./database/db";
 import routes from "./routes";

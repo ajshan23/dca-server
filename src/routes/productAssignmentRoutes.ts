@@ -7,7 +7,8 @@ import {
   getEmployeeAssignments,
   updateAssignment,
   getProductAssignments,
-  getAssignmentAnalytics, // ✅ new import
+  getAssignmentAnalytics,
+  generateAssignmentQr // ✅ new import for QR code
 } from "../controllers/productAssignmentController";
 import { authenticateJWT } from "../middlewares/authMiddleware";
 import { authorizeRoles } from "../middlewares/roleMiddleware";
@@ -21,7 +22,6 @@ router.post(
   authorizeRoles(UserRole.ADMIN, UserRole.SUPER_ADMIN, UserRole.USER),
   assignProduct
 );
-
 
 router.get(
   "/product/:productId",
@@ -43,5 +43,8 @@ router.put("/:assignmentId", authenticateJWT, updateAssignment);
 
 // ✅ New route for analytics
 router.get("/analytics", authenticateJWT, getAssignmentAnalytics);
+
+// ✅ New route for assignment QR code generation
+router.get("/:assignmentId/qr-code", authenticateJWT, generateAssignmentQr);
 
 export default router;
