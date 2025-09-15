@@ -3,7 +3,7 @@ import { AppError } from "../samples/errorHandler";
 import prisma from "../database/db";
 import { Prisma } from "@prisma/client";
 import QRCode from 'qrcode';
-
+import ExcelJS from 'exceljs';
 export async function assignProduct(req: Request, res: Response) {
   const { productId, employeeId, inventoryId, expectedReturnAt, notes, autoSelect = true } = req.body;
   const assignedById = req.user?.userId;
@@ -714,3 +714,227 @@ export async function generateAssignmentQr(req: Request, res: Response) {
     });
   }
 }
+  
+
+  export async function exportAssignmentsToExcel(req: Request, res: Response) {
+  try {
+    const {
+      fromDate,
+      toDate,
+      employeeId,
+      productId,
+      categoryId,
+      branchId,
+      departmentId,
+      status,
+      month,
+      year,
+      format = 'active' // 'active', 'history', 'all'
+    } = req.query;
+
+    // Build where clause based on filters
+    const where: any = {};
+    
+    // Date filters
+    if (month && year) {
+      const startDate = new Date(parseInt(year as string), parseInt(month as string) - 1, 1);
+      const endDate = new Date(parseInt(year as string), parseInt(month as string), 0);
+      where.assignedAt = {
+        gte: startDate,
+        lte: endDate
+      };
+    } else {
+      if (fromDate || toDate) {
+        where.assignedAt = {};
+        if (fromDate) where.assignedAt.gte = new Date(fromDate as string);
+        if (toDate) where.assignedAt.lte = new Date(toDate as string);
+      }
+    }
+
+    // Status filters
+    if (format === 'active') {
+      where.returnedAt = null;
+      where.status = 'ASSIGNED';
+    } else if (format === 'history') {
+      where.returnedAt = { not: null };
+    }
+    
+    if (status) where.status = status;
+    if (employeeId) where.employeeId = parseInt(employeeId as string);
+    if (productId) where.productId = parseInt(productId as string);
+    
+    // Category, branch, department filters
+    if (categoryId || branchId || departmentId) {
+      where.product = {};
+      if (categoryId) where.product.categoryId = parseInt(categoryId as string);
+      if (branchId) where.product.branchId = parseInt(branchId as string);
+      if (departmentId) where.product.departmentId = parseInt(departmentId as string);
+    }
+
+    // Fetch assignments data
+    const assignments = await prisma.productAssignment.findMany({
+      where,
+      include: {
+        product: {
+          include: {
+            category: { select: { name: true } },
+            branch: { select: { name: true } },
+            department: { select: { name: true } }
+          }
+        },
+        inventory: {
+          select: {
+            id: true,
+            serialNumber: true,
+            condition: true,
+            purchasePrice: true,
+            location: true
+          }
+        },
+        employee: {
+          select: {
+            id: true,
+            name: true,
+            empId: true,
+            department: true,
+            position: true
+          }
+        },
+        assignedBy: {
+          select: {
+            username: true
+          }
+        }
+      },
+      orderBy: { assignedAt: 'desc' }
+    });
+
+    // Create workbook and worksheet
+    const workbook = new ExcelJS.Workbook();
+    const worksheet = workbook.addWorksheet('Product Assignments');
+
+    // Set up columns
+    worksheet.columns = [
+      { header: 'Assignment ID', key: 'id', width: 15 },
+      { header: 'Product Name', key: 'productName', width: 25 },
+      { header: 'Product Model', key: 'productModel', width: 20 },
+      { header: 'Category', key: 'category', width: 15 },
+      { header: 'Branch', key: 'branch', width: 15 },
+      { header: 'Department', key: 'department', width: 15 },
+      { header: 'Serial Number', key: 'serialNumber', width: 20 },
+      { header: 'Employee Name', key: 'employeeName', width: 25 },
+      { header: 'Employee ID', key: 'employeeId', width: 15 },
+      { header: 'Employee Position', key: 'employeePosition', width: 20 },
+      { header: 'Employee Department', key: 'employeeDepartment', width: 20 },
+      { header: 'Assigned By', key: 'assignedBy', width: 15 },
+      { header: 'Assigned Date', key: 'assignedAt', width: 15 },
+      { header: 'Expected Return', key: 'expectedReturnAt', width: 15 },
+      { header: 'Returned Date', key: 'returnedAt', width: 15 },
+      { header: 'Status', key: 'status', width: 12 },
+      { header: 'Return Condition', key: 'returnCondition', width: 15 },
+      { header: 'Item Condition', key: 'itemCondition', width: 15 },
+      { header: 'Purchase Price', key: 'purchasePrice', width: 15 },
+      { header: 'Location', key: 'location', width: 15 },
+      { header: 'Duration (Days)', key: 'duration', width: 15 },
+      { header: 'Overdue Status', key: 'overdueStatus', width: 15 },
+      { header: 'Notes', key: 'notes', width: 30 }
+    ];
+
+    // Style the header row
+    worksheet.getRow(1).font = { bold: true };
+    worksheet.getRow(1).fill = {
+      type: 'pattern',
+      pattern: 'solid',
+      fgColor: { argb: 'FFE6F3FF' }
+    };
+
+    // Add data rows
+    assignments.forEach(assignment => {
+      const assignedDate = new Date(assignment.assignedAt);
+      const returnedDate = assignment.returnedAt ? new Date(assignment.returnedAt) : null;
+      const expectedDate = assignment.expectedReturnAt ? new Date(assignment.expectedReturnAt) : null;
+      
+      // Calculate duration
+      const endDate = returnedDate || new Date();
+      const durationDays = Math.floor((endDate.getTime() - assignedDate.getTime()) / (1000 * 60 * 60 * 24));
+      
+      // Check overdue status
+      let overdueStatus = 'N/A';
+      if (!returnedDate && expectedDate) {
+        overdueStatus = new Date() > expectedDate ? 'Overdue' : 'On Time';
+      } else if (returnedDate && expectedDate) {
+        overdueStatus = returnedDate > expectedDate ? 'Was Overdue' : 'Returned On Time';
+      }
+
+      worksheet.addRow({
+        id: assignment.id,
+        productName: assignment.product.name,
+        productModel: assignment.product.model,
+        category: assignment.product.category?.name || 'N/A',
+        branch: assignment.product.branch?.name || 'N/A',
+        department: assignment.product.department?.name || 'N/A',
+        serialNumber: assignment.inventory.serialNumber || `Item #${assignment.inventory.id}`,
+        employeeName: assignment.employee.name,
+        employeeId: assignment.employee.empId,
+        employeePosition: assignment.employee.position || 'N/A',
+        employeeDepartment: assignment.employee.department || 'N/A',
+        assignedBy: assignment.assignedBy.username,
+        assignedAt: assignedDate.toLocaleDateString(),
+        expectedReturnAt: expectedDate?.toLocaleDateString() || 'N/A',
+        returnedAt: returnedDate?.toLocaleDateString() || 'Not Returned',
+        status: assignment.status,
+        returnCondition: assignment.returnCondition || 'N/A',
+        itemCondition: assignment.inventory.condition,
+        purchasePrice: assignment.inventory.purchasePrice ? `$${assignment.inventory.purchasePrice}` : 'N/A',
+        location: assignment.inventory.location || 'N/A',
+        duration: durationDays,
+        overdueStatus,
+        notes: assignment.notes || ''
+      });
+    });
+
+    // Add summary section
+    worksheet.addRow([]);
+    worksheet.addRow(['SUMMARY']);
+    worksheet.addRow(['Total Assignments:', assignments.length]);
+    worksheet.addRow(['Active Assignments:', assignments.filter(a => !a.returnedAt).length]);
+    worksheet.addRow(['Returned Assignments:', assignments.filter(a => a.returnedAt).length]);
+    worksheet.addRow(['Overdue Assignments:', assignments.filter(a => !a.returnedAt && a.expectedReturnAt && new Date() > new Date(a.expectedReturnAt)).length]);
+
+    // Style summary section
+    const summaryStartRow = worksheet.rowCount - 4;
+    for (let i = summaryStartRow; i <= worksheet.rowCount; i++) {
+      worksheet.getRow(i).font = { bold: true };
+      worksheet.getRow(i).fill = {
+        type: 'pattern',
+        pattern: 'solid',
+        fgColor: { argb: 'FFFFF2CC' }
+      };
+    }
+
+    // Generate filename
+    const timestamp = new Date().toISOString().split('T')[0];
+    let filename = `product-assignments-${timestamp}`;
+    
+    if (month && year) {
+      const monthName = new Date(parseInt(year as string), parseInt(month as string) - 1).toLocaleString('default', { month: 'long' });
+      filename = `product-assignments-${monthName}-${year}`;
+    }
+    
+    // Set response headers
+    res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+    res.setHeader('Content-Disposition', `attachment; filename="${filename}.xlsx"`);
+
+    // Write to response
+    await workbook.xlsx.write(res);
+    res.end();
+
+  } catch (error) {
+    console.error('Excel export error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to export assignments to Excel',
+      error: error instanceof Error ? error.message : undefined
+    });
+  }
+  }

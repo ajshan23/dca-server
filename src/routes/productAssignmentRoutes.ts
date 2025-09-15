@@ -8,14 +8,15 @@ import {
   updateAssignment,
   getProductAssignments,
   getAssignmentAnalytics,
-  generateAssignmentQr // ✅ new import for QR code
+  generateAssignmentQr, // ✅ new import for QR code
+  exportAssignmentsToExcel
 } from "../controllers/productAssignmentController";
 import { authenticateJWT } from "../middlewares/authMiddleware";
 import { authorizeRoles } from "../middlewares/roleMiddleware";
 import { UserRole } from "../constant/roles";
 
 const router = express.Router();
-
+router.get("/export/excel", authenticateJWT, exportAssignmentsToExcel);
 router.post(
   "/assign",
   authenticateJWT,

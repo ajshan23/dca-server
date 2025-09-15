@@ -59,10 +59,10 @@ export async function createEmployee(req: Request, res: Response) {
 
 export async function getAllEmployees(req: Request, res: Response) {
   try {
-    const { search, branchId, department } = req.query;
-    
+    const { search, branchId, department, page = '1', limit = '10' } = req.query;
+
     const where: any = { deletedAt: null };
-    
+
     if (search) {
       where.OR = [
         { name: { contains: search as string, mode: 'insensitive' } },
@@ -74,38 +74,53 @@ export async function getAllEmployees(req: Request, res: Response) {
     if (branchId) where.branchId = parseInt(branchId as string);
     if (department) where.department = { contains: department as string, mode: 'insensitive' };
 
-    const employees = await prisma.employee.findMany({
-      where,
-      select: {
-        id: true,
-        empId: true,
-        name: true,
-        email: true,
-        department: true,
-        position: true,
-        branch: {
-          select: {
-            id: true,
-            name: true
-          }
-        },
-        createdAt: true,
-        _count: {
-          select: {
-            assignments: {
-              where: {
-                returnedAt: null
+    const pageNum = parseInt(page as string, 10) || 1;
+    const pageSize = parseInt(limit as string, 10) || 10;
+    const skip = (pageNum - 1) * pageSize;
+
+    const [employees, total] = await Promise.all([
+      prisma.employee.findMany({
+        where,
+        skip,
+        take: pageSize,
+        select: {
+          id: true,
+          empId: true,
+          name: true,
+          email: true,
+          department: true,
+          position: true,
+          branch: {
+            select: {
+              id: true,
+              name: true
+            }
+          },
+          createdAt: true,
+          _count: {
+            select: {
+              assignments: {
+                where: {
+                  returnedAt: null
+                }
               }
             }
           }
+        },
+        orderBy: {
+          name: 'asc'
         }
-      },
-      orderBy: {
-        name: 'asc'
-      }
-    });
+      }),
+      prisma.employee.count({ where })
+    ]);
 
-    res.json({ success: true, data: employees });
+    res.json({
+      success: true,
+      data: employees,
+      total,
+      page: pageNum,
+      limit: pageSize
+    });
   } catch (error) {
     throw new AppError("Failed to fetch employees", 500);
   }

@@ -2,7 +2,7 @@ import { Request, Response } from "express";
 import { AppError } from "../samples/errorHandler";
 import prisma from "../database/db";
 import QRCode from 'qrcode';
-
+import ExcelJS from 'exceljs';
 // Create a new product template
 export async function createProduct(req: Request, res: Response) {
   try {
@@ -910,6 +910,225 @@ export async function generateProductQr(req: Request, res: Response) {
     res.status(500).json({
       success: false,
       message: error instanceof Error ? error.message : 'Failed to generate QR code'
+    });
+  }
+}
+
+
+
+export async function exportProductsToExcel(req: Request, res: Response) {
+  try {
+    const {
+      categoryId,
+      branchId,
+      departmentId,
+      stockStatus,
+      complianceStatus,
+      includeInventory = 'false'
+    } = req.query;
+
+    // Build where clause
+    const where: any = { deletedAt: null };
+    
+    if (categoryId) where.categoryId = parseInt(categoryId as string);
+    if (branchId) where.branchId = parseInt(branchId as string);
+    if (departmentId) where.departmentId = parseInt(departmentId as string);
+    if (complianceStatus) where.complianceStatus = complianceStatus === 'true';
+
+    // Fetch products with stock information
+    const products = await prisma.product.findMany({
+      where,
+      include: {
+        category: { select: { name: true } },
+        branch: { select: { name: true } },
+        department: { select: { name: true } },
+        inventory: {
+          select: {
+            id: true,
+            serialNumber: true,
+            status: true,
+            condition: true,
+            purchaseDate: true,
+            purchasePrice: true,
+            warrantyExpiry: true,
+            location: true
+          }
+        },
+        _count: {
+          select: {
+            inventory: true,
+            assignments: {
+              where: { returnedAt: null }
+            }
+          }
+        }
+      },
+      orderBy: { name: 'asc' }
+    });
+
+    // Transform products with stock info and filter by stock status
+    let transformedProducts = products.map(product => {
+      const totalStock = product.inventory.length;
+      const availableStock = product.inventory.filter(item => item.status === 'AVAILABLE').length;
+      const assignedStock = product._count.assignments;
+      const damagedStock = product.inventory.filter(item => item.status === 'DAMAGED').length;
+      const maintenanceStock = product.inventory.filter(item => item.status === 'MAINTENANCE').length;
+      const retiredStock = product.inventory.filter(item => item.status === 'RETIRED').length;
+
+      const stockStatusValue = availableStock === 0 ? 'OUT_OF_STOCK' :
+        availableStock <= product.minStockLevel ? 'LOW_STOCK' : 'AVAILABLE';
+
+      return {
+        ...product,
+        stockInfo: {
+          totalStock,
+          availableStock,
+          assignedStock,
+          damagedStock,
+          maintenanceStock,
+          retiredStock,
+          stockStatus: stockStatusValue
+        }
+      };
+    });
+
+    // Filter by stock status if specified
+    if (stockStatus) {
+      transformedProducts = transformedProducts.filter(product => {
+        switch (stockStatus) {
+          case 'low':
+            return product.stockInfo.stockStatus === 'LOW_STOCK';
+          case 'out':
+            return product.stockInfo.stockStatus === 'OUT_OF_STOCK';
+          case 'available':
+            return product.stockInfo.stockStatus === 'AVAILABLE';
+          default:
+            return true;
+        }
+      });
+    }
+
+    // Create workbook
+    const workbook = new ExcelJS.Workbook();
+    
+    // Products Overview Sheet
+    const productsSheet = workbook.addWorksheet('Products Overview');
+    
+    productsSheet.columns = [
+      { header: 'Product ID', key: 'id', width: 12 },
+      { header: 'Product Name', key: 'name', width: 30 },
+      { header: 'Model', key: 'model', width: 20 },
+      { header: 'Category', key: 'category', width: 15 },
+      { header: 'Branch', key: 'branch', width: 15 },
+      { header: 'Department', key: 'department', width: 15 },
+      { header: 'Total Stock', key: 'totalStock', width: 12 },
+      { header: 'Available', key: 'availableStock', width: 12 },
+      { header: 'Assigned', key: 'assignedStock', width: 12 },
+      { header: 'Damaged', key: 'damagedStock', width: 12 },
+      { header: 'Maintenance', key: 'maintenanceStock', width: 12 },
+      { header: 'Retired', key: 'retiredStock', width: 12 },
+      { header: 'Min Stock Level', key: 'minStockLevel', width: 15 },
+      { header: 'Stock Status', key: 'stockStatus', width: 15 },
+      { header: 'Compliance', key: 'complianceStatus', width: 12 },
+      { header: 'Warranty (Months)', key: 'warrantyDuration', width: 18 },
+      { header: 'Description', key: 'description', width: 40 },
+      { header: 'Created Date', key: 'createdAt', width: 15 }
+    ];
+
+    // Style header
+    productsSheet.getRow(1).font = { bold: true };
+    productsSheet.getRow(1).fill = {
+      type: 'pattern',
+      pattern: 'solid',
+      fgColor: { argb: 'FFE6F3FF' }
+    };
+
+    // Add product data
+    transformedProducts.forEach(product => {
+      productsSheet.addRow({
+        id: product.id,
+        name: product.name,
+        model: product.model,
+        category: product.category?.name || 'N/A',
+        branch: product.branch?.name || 'N/A',
+        department: product.department?.name || 'N/A',
+        totalStock: product.stockInfo.totalStock,
+        availableStock: product.stockInfo.availableStock,
+        assignedStock: product.stockInfo.assignedStock,
+        damagedStock: product.stockInfo.damagedStock,
+        maintenanceStock: product.stockInfo.maintenanceStock,
+        retiredStock: product.stockInfo.retiredStock,
+        minStockLevel: product.minStockLevel,
+        stockStatus: product.stockInfo.stockStatus,
+        complianceStatus: product.complianceStatus ? 'Yes' : 'No',
+        warrantyDuration: product.warrantyDuration || 'N/A',
+        description: product.description || '',
+        createdAt: new Date(product.createdAt).toLocaleDateString()
+      });
+    });
+
+    // If inventory details are requested, create separate sheet
+    if (includeInventory === 'true') {
+      const inventorySheet = workbook.addWorksheet('Inventory Details');
+      
+      inventorySheet.columns = [
+        { header: 'Inventory ID', key: 'inventoryId', width: 15 },
+        { header: 'Product Name', key: 'productName', width: 30 },
+        { header: 'Model', key: 'model', width: 20 },
+        { header: 'Serial Number', key: 'serialNumber', width: 20 },
+        { header: 'Status', key: 'status', width: 12 },
+        { header: 'Condition', key: 'condition', width: 12 },
+        { header: 'Purchase Date', key: 'purchaseDate', width: 15 },
+        { header: 'Purchase Price', key: 'purchasePrice', width: 15 },
+        { header: 'Warranty Expiry', key: 'warrantyExpiry', width: 15 },
+        { header: 'Location', key: 'location', width: 20 }
+      ];
+
+      // Style header
+      inventorySheet.getRow(1).font = { bold: true };
+      inventorySheet.getRow(1).fill = {
+        type: 'pattern',
+        pattern: 'solid',
+        fgColor: { argb: 'FFFFE6CC' }
+      };
+
+      // Add inventory data
+      transformedProducts.forEach(product => {
+        product.inventory.forEach(item => {
+          inventorySheet.addRow({
+            inventoryId: item.id,
+            productName: product.name,
+            model: product.model,
+            serialNumber: item.serialNumber || `Item #${item.id}`,
+            status: item.status,
+            condition: item.condition,
+            purchaseDate: item.purchaseDate ? new Date(item.purchaseDate).toLocaleDateString() : 'N/A',
+            purchasePrice: item.purchasePrice ? `$${item.purchasePrice}` : 'N/A',
+            warrantyExpiry: item.warrantyExpiry ? new Date(item.warrantyExpiry).toLocaleDateString() : 'N/A',
+            location: item.location || 'N/A'
+          });
+        });
+      });
+    }
+
+    // Generate filename
+    const timestamp = new Date().toISOString().split('T')[0];
+    const filename = `products-report-${timestamp}`;
+
+    // Set response headers
+    res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+    res.setHeader('Content-Disposition', `attachment; filename="${filename}.xlsx"`);
+
+    // Write to response
+    await workbook.xlsx.write(res);
+    res.end();
+
+  } catch (error) {
+    console.error('Products Excel export error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to export products to Excel',
+      error: error instanceof Error ? error.message : undefined
     });
   }
 }

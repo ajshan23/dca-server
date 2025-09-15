@@ -106,11 +106,19 @@ export async function updateUser(req: Request, res: Response) {
     const { id } = req.params;
     const { username, password, role } = req.body;
 
+    // Validate ID parameter
+    const userId = parseInt(id);
+    if (isNaN(userId)) {
+      throw new AppError("Invalid user ID", 400);
+    }
+
+    // Find the user
     const user = await prisma.user.findUnique({
-      where: { id: parseInt(id) }
+      where: { id: userId }
     });
 
     if (!user) throw new AppError("User not found", 404);
+    if (user.deletedAt) throw new AppError("User has been deleted", 404);
 
     // Prevent privilege escalation
     if (role && role !== user.role) {
@@ -132,7 +140,8 @@ export async function updateUser(req: Request, res: Response) {
       const existingUser = await prisma.user.findFirst({
         where: { 
           username: { equals: username },
-          deletedAt: null 
+          deletedAt: null,
+          NOT: { id: userId } // Exclude current user from the check
         }
       });
       if (existingUser) throw new AppError("Username already exists", 409);
@@ -140,6 +149,9 @@ export async function updateUser(req: Request, res: Response) {
     }
 
     if (password) {
+      if (password.length < 8) {
+        throw new AppError("Password must be at least 8 characters", 400);
+      }
       updateData.passwordHash = await bcrypt.hash(password, BCRYPT_SALT_ROUNDS);
     }
 
@@ -147,8 +159,13 @@ export async function updateUser(req: Request, res: Response) {
       updateData.role = role;
     }
 
+    // Check if there's anything to update
+    if (Object.keys(updateData).length === 0) {
+      throw new AppError("No valid fields to update", 400);
+    }
+
     const updatedUser = await prisma.user.update({
-      where: { id: parseInt(id) },
+      where: { id: userId },
       data: updateData,
       select: {
         id: true,
@@ -159,7 +176,31 @@ export async function updateUser(req: Request, res: Response) {
     });
 
     res.json({ success: true, data: updatedUser });
-  } catch (error) {
-    throw error;
+  } catch (error:any) {
+    // Proper error handling
+    if (error instanceof AppError) {
+      res.status(error.statusCode).json({
+        success: false,
+        message: error.message
+      });
+    } else if (error.code === 'P2025') {
+      // Prisma record not found
+      res.status(404).json({
+        success: false,
+        message: "User not found"
+      });
+    } else if (error.code === 'P2002') {
+      // Prisma unique constraint violation
+      res.status(409).json({
+        success: false,
+        message: "Username already exists"
+      });
+    } else {
+      console.error("Update user error:", error);
+      res.status(500).json({
+        success: false,
+        message: "Internal server error"
+      });
+    }
   }
 }

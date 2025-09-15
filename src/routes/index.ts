@@ -8,7 +8,8 @@ import categoryRoutes from "./categoryRoutes";
 import branchRoutes from "./branchRoutes";
 import dashboardRoutes from "./dashboardRoutes";
 import departmentRoutes from "./departmentRoutes"; 
-import  publicRoutes from "./publicRoutes"
+import  publicRoutes from "./publicRoutes";
+import syncRoute from "./syncRoute";
 import {  main, updateSuperAdminRole } from "../database/seed";
 
 const router = express.Router();
@@ -26,6 +27,7 @@ router.get("/seed", (_req, res) => {
   res.status(200).json({ status: "OK", timestamp: new Date() });
 });
 router.use("/public", publicRoutes);
+router.use("/sync", syncRoute);
 
 // Routes
 router.use("/users", userRoutes);

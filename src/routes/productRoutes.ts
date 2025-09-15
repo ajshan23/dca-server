@@ -13,7 +13,8 @@ import {
   deleteInventoryItem,
   getStockTransactions,
   generateInventoryQr,
-  getStockSummary
+  getStockSummary,
+  exportProductsToExcel
 } from "../controllers/productController";
 import { authenticateJWT } from "../middlewares/authMiddleware";
 import { authorizeRoles } from "../middlewares/roleMiddleware";
@@ -25,6 +26,7 @@ const router = express.Router();
 router.post("/", authenticateJWT, authorizeRoles(UserRole.ADMIN, UserRole.SUPER_ADMIN, UserRole.USER), createProduct);
 router.get("/", getAllProducts);
 router.get("/assigned", getAssignedProducts); // Legacy route
+router.get("/export/excel", authenticateJWT, exportProductsToExcel);
 router.get("/stock-summary", authenticateJWT, getStockSummary);
 router.get("/:id", getProductById);
 router.put("/:id", authenticateJWT, authorizeRoles(UserRole.ADMIN, UserRole.SUPER_ADMIN, UserRole.USER), updateProduct);

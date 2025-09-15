@@ -49,7 +49,7 @@ async function startServer() {
   try {
     await checkDatabaseConnection();
 
-    const server = app.listen(4000, () => {
+    const server = app.listen(4001, () => {
       console.log(`🚀 Server running on port ${config.port} in ${config.env} mode`);
     });
 
