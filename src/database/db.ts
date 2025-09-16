@@ -11,7 +11,7 @@ const prisma = new PrismaClient({
 });
 
 // Soft delete middleware
-prisma.$use(async (params: any, next: any) => {
+(prisma as any).$use(async (params: any, next: any) => {
   // Check incoming query type
   if (params.action === 'delete') {
     // Delete queries

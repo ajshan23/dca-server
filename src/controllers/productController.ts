@@ -244,16 +244,27 @@ export async function getProductById(req: Request, res: Response) {
         deletedAt: null
       },
       include: {
-        category: { select: { id: true, name: true } },
-        branch: { select: { id: true, name: true } },
-        department: { select: { id: true, name: true } },
+        category: {
+          select: { id: true, name: true }
+        },
+        branch: {
+          select: { id: true, name: true }
+        },
+        department: {
+          select: { id: true, name: true }
+        },
         inventory: {
+          where: { deletedAt: null }, // Add this filter to exclude deleted inventory items
           include: {
             assignments: {
               where: { returnedAt: null },
               include: {
-                employee: { select: { id: true, name: true, empId: true } },
-                assignedBy: { select: { id: true, username: true } }
+                employee: {
+                  select: { id: true, name: true, empId: true }
+                },
+                assignedBy: {
+                  select: { id: true, username: true }
+                }
               }
             }
           },
@@ -261,11 +272,17 @@ export async function getProductById(req: Request, res: Response) {
         },
         assignments: {
           orderBy: { assignedAt: 'desc' },
-          take: 10, // Recent assignments
+          take: 10,
           include: {
-            inventory: { select: { id: true, serialNumber: true } },
-            employee: { select: { id: true, name: true, empId: true } },
-            assignedBy: { select: { id: true, username: true } }
+            inventory: {
+              select: { id: true, serialNumber: true }
+            },
+            employee: {
+              select: { id: true, name: true, empId: true }
+            },
+            assignedBy: {
+              select: { id: true, username: true }
+            }
           }
         }
       }
@@ -273,7 +290,7 @@ export async function getProductById(req: Request, res: Response) {
 
     if (!product) throw new AppError("Product not found", 404);
 
-    // Calculate stock statistics
+    // Calculate stock statistics (now excludes deleted items)
     const stockStats = {
       totalStock: product.inventory.length,
       availableStock: product.inventory.filter(item => item.status === 'AVAILABLE').length,
@@ -283,18 +300,11 @@ export async function getProductById(req: Request, res: Response) {
       retiredStock: product.inventory.filter(item => item.status === 'RETIRED').length
     };
 
-    res.json({
-      success: true,
-      data: {
-        ...product,
-        stockStats
-      }
-    });
+    res.json({ success: true, data: { ...product, stockStats } });
   } catch (error) {
     throw error;
   }
 }
-
 // Add stock to existing product
 export async function addStock(req: Request, res: Response) {
   try {
@@ -470,12 +480,12 @@ export async function getAvailableInventory(req: Request, res: Response) {
   }
 }
 
-// Delete/Retire inventory item
+// Permanently delete inventory item
 export async function deleteInventoryItem(req: Request, res: Response) {
   try {
     const { inventoryId } = req.params;
-    const { reason = "Item retired", permanent = false } = req.body;
 
+    // Find the inventory item and check for active assignments
     const inventoryItem = await prisma.productInventory.findUnique({
       where: { id: parseInt(inventoryId) },
       include: {
@@ -483,46 +493,37 @@ export async function deleteInventoryItem(req: Request, res: Response) {
       }
     });
 
-    if (!inventoryItem) throw new AppError("Inventory item not found", 404);
+    if (!inventoryItem) {
+      throw new AppError("Inventory item not found", 404);
+    }
 
+    // Check if item is currently assigned
     if (inventoryItem.assignments.length > 0) {
       throw new AppError("Cannot delete assigned item", 400);
     }
 
+    // Permanently delete in transaction
     await prisma.$transaction(async (tx) => {
-      if (permanent) {
-        // Permanently delete (soft delete)
-        await tx.productInventory.update({
-          where: { id: parseInt(inventoryId) },
-          data: {
-            deletedAt: new Date(),
-            status: "RETIRED"
-          }
-        });
-      } else {
-        // Just mark as retired
-        await tx.productInventory.update({
-          where: { id: parseInt(inventoryId) },
-          data: { status: "RETIRED" }
-        });
-      }
+      // Delete related records first (foreign key constraints)
+      await tx.stockTransaction.deleteMany({
+        where: { inventoryId: parseInt(inventoryId) }
+      });
 
-      // Create transaction record
-      await tx.stockTransaction.create({
-        data: {
-          inventoryId: parseInt(inventoryId),
-          type: permanent ? "OUT" : "RETIRED",
-          quantity: 1,
-          reason,
-          reference: `DEL-${Date.now()}`
-        }
+      await tx.productAssignment.deleteMany({
+        where: { inventoryId: parseInt(inventoryId) }
+      });
+
+      // Finally delete the inventory item
+      await tx.productInventory.delete({
+        where: { id: parseInt(inventoryId) }
       });
     });
 
     res.json({
       success: true,
-      message: permanent ? "Inventory item deleted permanently" : "Inventory item retired"
+      message: "Inventory item deleted permanently"
     });
+
   } catch (error) {
     throw error;
   }
@@ -914,8 +915,6 @@ export async function generateProductQr(req: Request, res: Response) {
   }
 }
 
-
-
 export async function exportProductsToExcel(req: Request, res: Response) {
   try {
     const {
@@ -1130,5 +1129,72 @@ export async function exportProductsToExcel(req: Request, res: Response) {
       message: 'Failed to export products to Excel',
       error: error instanceof Error ? error.message : undefined
     });
+  }
+}
+export async function bulkDeleteInventoryItems(req: Request, res: Response) {
+  try {
+    const { inventoryIds } = req.body;
+
+    if (!inventoryIds || !Array.isArray(inventoryIds) || inventoryIds.length === 0) {
+      throw new AppError("Inventory IDs array is required", 400);
+    }
+
+    // Convert to numbers and validate
+    const numericIds = inventoryIds.map(id => parseInt(id));
+    if (numericIds.some(id => isNaN(id))) {
+      throw new AppError("Invalid inventory ID format", 400);
+    }
+
+    // Find all inventory items and check for active assignments
+    const inventoryItems = await prisma.productInventory.findMany({
+      where: {
+        id: { in: numericIds }
+      },
+      include: {
+        assignments: { where: { returnedAt: null } }
+      }
+    });
+
+    // Check if all items exist
+    if (inventoryItems.length !== numericIds.length) {
+      const foundIds = inventoryItems.map(item => item.id);
+      const missingIds = numericIds.filter(id => !foundIds.includes(id));
+      throw new AppError(`Inventory items not found: ${missingIds.join(', ')}`, 404);
+    }
+
+    // Check for assigned items
+    const assignedItems = inventoryItems.filter(item => item.assignments.length > 0);
+    if (assignedItems.length > 0) {
+      throw new AppError(
+        `Cannot delete assigned items: ${assignedItems.map(item => item.id).join(', ')}`, 
+        400
+      );
+    }
+
+    // Permanently delete all items in transaction (exactly like single delete)
+    await prisma.$transaction(async (tx) => {
+      // Delete related stock transactions
+      await tx.stockTransaction.deleteMany({
+        where: { inventoryId: { in: numericIds } }
+      });
+
+      // Delete related product assignments
+      await tx.productAssignment.deleteMany({
+        where: { inventoryId: { in: numericIds } }
+      });
+
+      // Finally delete all inventory items
+      await tx.productInventory.deleteMany({
+        where: { id: { in: numericIds } }
+      });
+    });
+
+    res.json({
+      success: true,
+      message: `${inventoryIds.length} inventory item(s) deleted permanently`
+    });
+
+  } catch (error) {
+    throw error;
   }
 }

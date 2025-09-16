@@ -65,14 +65,14 @@ export async function getAllEmployees(req: Request, res: Response) {
 
     if (search) {
       where.OR = [
-        { name: { contains: search as string, mode: 'insensitive' } },
-        { empId: { contains: search as string, mode: 'insensitive' } },
-        { email: { contains: search as string, mode: 'insensitive' } }
+        { name: { contains: search as string } },
+        { empId: { contains: search as string } },
+        { email: { contains: search as string } }
       ];
     }
 
     if (branchId) where.branchId = parseInt(branchId as string);
-    if (department) where.department = { contains: department as string, mode: 'insensitive' };
+    if (department) where.department = { contains: department as string };
 
     const pageNum = parseInt(page as string, 10) || 1;
     const pageSize = parseInt(limit as string, 10) || 10;

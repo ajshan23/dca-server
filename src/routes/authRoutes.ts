@@ -3,7 +3,7 @@ import { login, createUser, updateUser } from "../controllers/authController";
 import { authenticateJWT } from "../middlewares/authMiddleware";
 import { authorizeRoles } from "../middlewares/roleMiddleware";
 import { UserRole } from "../constant/roles";
-import { changePassword } from "@/controllers/userController";
+import { changePassword } from "../controllers/userController";
 const router = express.Router();
 
 router.post("/login", login);

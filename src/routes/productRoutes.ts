@@ -14,7 +14,8 @@ import {
   getStockTransactions,
   generateInventoryQr,
   getStockSummary,
-  exportProductsToExcel
+  exportProductsToExcel,
+  bulkDeleteInventoryItems
 } from "../controllers/productController";
 import { authenticateJWT } from "../middlewares/authMiddleware";
 import { authorizeRoles } from "../middlewares/roleMiddleware";
@@ -40,6 +41,7 @@ router.get("/:productId/available-inventory", authenticateJWT, getAvailableInven
 // Inventory item routes
 router.put("/inventory/:inventoryId", authenticateJWT, authorizeRoles(UserRole.ADMIN, UserRole.SUPER_ADMIN, UserRole.USER), updateInventoryItem);
 router.delete("/inventory/:inventoryId", authenticateJWT, authorizeRoles(UserRole.ADMIN, UserRole.SUPER_ADMIN, UserRole.USER), deleteInventoryItem);
+router.post("/inventory/bulk-delete", authenticateJWT, authorizeRoles(UserRole.ADMIN, UserRole.SUPER_ADMIN, UserRole.USER), bulkDeleteInventoryItems); 
 router.post("/inventory/:inventoryId/generate-qr", authenticateJWT, generateInventoryQr);
 
 // Stock transaction routes
