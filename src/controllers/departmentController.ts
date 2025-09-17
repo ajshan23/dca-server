@@ -35,37 +35,53 @@ export async function createDepartment(req: Request, res: Response) {
 
 export async function getAllDepartments(req: Request, res: Response) {
   try {
-    const { search } = req.query;
-    
+    const { search, page = "1", limit = "10" } = req.query;
+
     const where: any = { deletedAt: null };
-    
+
     if (search) {
       where.OR = [
-        { name: { contains: search as string, mode: 'insensitive' } },
-        { description: { contains: search as string, mode: 'insensitive' } }
+        { name: { contains: search as string } },
+        { description: { contains: search as string } }
       ];
     }
 
-    const departments = await prisma.department.findMany({
-      where,
-      select: {
-        id: true,
-        name: true,
-        description: true,
-        createdAt: true,
-        _count: {
-          select: {
-            products: true
-          }
-        }
-      },
-      orderBy: {
-        name: 'asc'
-      }
-    });
+    const pageNum = parseInt(page as string, 10) || 1;
+    const pageSize = parseInt(limit as string, 10) || 10;
+    const skip = (pageNum - 1) * pageSize;
 
-    res.json({ success: true, data: departments });
+    const [departments, total] = await Promise.all([
+      prisma.department.findMany({
+        where,
+        skip,
+        take: pageSize,
+        select: {
+          id: true,
+          name: true,
+          description: true,
+          createdAt: true,
+          _count: {
+            select: {
+              products: true
+            }
+          }
+        },
+        orderBy: {
+          name: "asc"
+        }
+      }),
+      prisma.department.count({ where })
+    ]);
+
+    res.json({
+      success: true,
+      data: departments,
+      total,
+      page: pageNum,
+      limit: pageSize
+    });
   } catch (error) {
+    console.error("Error fetching departments:", error);
     throw new AppError("Failed to fetch departments", 500);
   }
 }

@@ -9,7 +9,8 @@ import {
   getProductAssignments,
   getAssignmentAnalytics,
   generateAssignmentQr, // ✅ new import for QR code
-  exportAssignmentsToExcel
+  exportAssignmentsToExcel,
+  getAssignmentById
 } from "../controllers/productAssignmentController";
 import { authenticateJWT } from "../middlewares/authMiddleware";
 import { authorizeRoles } from "../middlewares/roleMiddleware";
@@ -40,10 +41,11 @@ router.post(
 router.get("/active", authenticateJWT, getActiveAssignments);
 router.get("/history", authenticateJWT, getAssignmentHistory);
 router.get("/employee/:employeeId", authenticateJWT, getEmployeeAssignments);
-router.put("/:assignmentId", authenticateJWT, updateAssignment);
-
-// ✅ New route for analytics
 router.get("/analytics", authenticateJWT, getAssignmentAnalytics);
+router.put("/:assignmentId", authenticateJWT, updateAssignment);
+router.get("/:id", authenticateJWT, getAssignmentById);
+// ✅ New route for analytics
+
 
 // ✅ New route for assignment QR code generation
 router.get("/:assignmentId/qr-code", authenticateJWT, generateAssignmentQr);

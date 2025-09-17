@@ -31,41 +31,57 @@ export async function createBranch(req: Request, res: Response) {
     throw error;
   }
 }
-
 export async function getAllBranches(req: Request, res: Response) {
   try {
-    const { search } = req.query;
-    
-    const where: any = { deletedAt: null };
-    
+    const { search, page = "1", limit = "10" } = req.query;
+
+    let where: any = { deletedAt: null };
+
     if (search) {
-      where.name = { contains: search as string, mode: 'insensitive' };
+      where.name = {
+        contains: String(search).toLowerCase(),
+      };
     }
 
-    const branches = await prisma.branch.findMany({
-      where,
-      select: {
-        id: true,
-        name: true,
-        createdAt: true,
-        _count: {
-          select: {
-            products: true,
-            employees: true
-          }
-        }
-      },
-      orderBy: {
-        name: 'asc'
-      }
-    });
+    const pageNum = parseInt(page as string, 10) || 1;
+    const pageSize = parseInt(limit as string, 10) || 10;
+    const skip = (pageNum - 1) * pageSize;
 
-    res.json({ success: true, data: branches });
+    const [branches, total] = await Promise.all([
+      prisma.branch.findMany({
+        where,
+        skip,
+        take: pageSize,
+        select: {
+          id: true,
+          name: true,
+          createdAt: true,
+          _count: {
+            select: {
+              products: true,
+              employees: true,
+            },
+          },
+        },
+        orderBy: { name: "asc" },
+      }),
+      prisma.branch.count({ where }),
+    ]);
+
+    res.json({
+      success: true,
+      data: branches,
+      pagination: {
+        total,
+        page: pageNum,
+        limit: pageSize,
+        totalPages: Math.ceil(total / pageSize),
+      },
+    });
   } catch (error) {
     throw new AppError("Failed to fetch branches", 500);
   }
 }
-
 export async function getBranchById(req: Request, res: Response) {
   try {
     const branch = await prisma.branch.findUnique({

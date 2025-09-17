@@ -1,11 +1,10 @@
 import { Request, Response } from "express";
 import { AppError } from "../samples/errorHandler";
 import prisma from "../database/db";
-import { Prisma } from "@prisma/client";
 import QRCode from 'qrcode';
 import ExcelJS from 'exceljs';
 export async function assignProduct(req: Request, res: Response) {
-  const { productId, employeeId, inventoryId, expectedReturnAt, notes, autoSelect = true } = req.body;
+  const { productId, employeeId, inventoryId, expectedReturnAt, notes, pcName, autoSelect = true } = req.body;
   const assignedById = req.user?.userId;
 
   // Validate required fields
@@ -20,7 +19,7 @@ export async function assignProduct(req: Request, res: Response) {
 
   try {
     // Use transaction to ensure data consistency
-    const result = await prisma.$transaction(async (tx) => {
+    const result = await prisma.$transaction(async (tx:any) => {
       // Verify product exists and is not deleted
       const product = await tx.product.findFirst({
         where: { id: productId, deletedAt: null }
@@ -82,13 +81,14 @@ export async function assignProduct(req: Request, res: Response) {
         data: { status: 'ASSIGNED' }
       });
 
-      // Create new assignment
+      // Create new assignment with pcName
       const assignment = await tx.productAssignment.create({
         data: {
           productId,
           inventoryId: selectedInventory.id,
           employeeId,
           assignedById: parseInt(assignedById),
+          pcName: pcName || null, // New field
           expectedReturnAt: expectedReturnAt ? new Date(expectedReturnAt) : null,
           notes,
           status: "ASSIGNED"
@@ -112,7 +112,7 @@ export async function assignProduct(req: Request, res: Response) {
           inventoryId: selectedInventory.id,
           type: "OUT",
           quantity: 1,
-          reason: `Assigned to ${employee.name} (${employee.empId})`,
+          reason: `Assigned to ${employee.name} (${employee.empId})${pcName ? ` - PC: ${pcName}` : ''}`,
           reference: `ASSIGN-${assignment.id}`,
           userId: parseInt(assignedById)
         }
@@ -126,22 +126,7 @@ export async function assignProduct(req: Request, res: Response) {
   } catch (error) {
     console.error('Assignment error:', error);
     
-    if (error instanceof Prisma.PrismaClientKnownRequestError) {
-      if (error.code === 'P2002') {
-        res.status(400).json({ 
-          success: false, 
-          message: "Assignment conflict - this inventory item is already assigned" 
-        });
-        return;
-      }
-      if (error.code === 'P2003') {
-        res.status(400).json({ 
-          success: false, 
-          message: "Invalid ID provided - product, inventory, or employee doesn't exist" 
-        });
-        return;
-      }
-    }
+    
     
     if (error instanceof AppError) {
       res.status(error.statusCode).json({ 
@@ -159,6 +144,7 @@ export async function assignProduct(req: Request, res: Response) {
     return;
   }
 }
+
 
 export async function returnProduct(req: Request, res: Response) {
   const { assignmentId } = req.params;
@@ -184,7 +170,7 @@ export async function returnProduct(req: Request, res: Response) {
       return;
     }
 
-    const result = await prisma.$transaction(async (tx) => {
+    const result = await prisma.$transaction(async (tx:any) => {
       // Update assignment as returned
       const updatedAssignment = await tx.productAssignment.update({
         where: { id: parseInt(assignmentId) },
@@ -248,31 +234,33 @@ export async function returnProduct(req: Request, res: Response) {
 
 export async function getActiveAssignments(req: Request, res: Response) {
   try {
-    const { page = 1, limit = 10, search, employeeId, productId, overdue } = req.query;
-    const pageNumber = Number(page);
-    const limitNumber = Number(limit);
+    const { page = "1", limit = "10", search, employeeId, productId, overdue } = req.query;
+
+    const pageNumber = parseInt(page as string, 10) || 1;
+    const limitNumber = parseInt(limit as string, 10) || 10;
+    const skip = (pageNumber - 1) * limitNumber;
 
     const where: any = {
       returnedAt: null,
-      status: 'ASSIGNED'
+      status: "ASSIGNED",
     };
 
     if (employeeId) where.employeeId = parseInt(employeeId as string);
     if (productId) where.productId = parseInt(productId as string);
-    
+
     if (search) {
+      const searchStr = String(search).toLowerCase();
       where.OR = [
-        { product: { name: { contains: search as string, mode: 'insensitive' } } },
-        { product: { model: { contains: search as string, mode: 'insensitive' } } },
-        { employee: { name: { contains: search as string, mode: 'insensitive' } } },
-        { inventory: { serialNumber: { contains: search as string, mode: 'insensitive' } } }
+        { product: { name: { contains: searchStr } } },
+        { product: { model: { contains: searchStr } } },
+        { employee: { name: { contains: searchStr } } },
+        { inventory: { serialNumber: { contains: searchStr } } },
+        { pcName: { contains: searchStr } }, // Search by PC name
       ];
     }
 
-    if (overdue === 'true') {
-      where.expectedReturnAt = {
-        lt: new Date()
-      };
+    if (overdue === "true") {
+      where.expectedReturnAt = { lt: new Date() };
     }
 
     const [assignments, total] = await prisma.$transaction([
@@ -285,45 +273,51 @@ export async function getActiveAssignments(req: Request, res: Response) {
               name: true,
               model: true,
               category: true,
-              branch: true
-            }
+              branch: true,
+            },
           },
           inventory: {
             select: {
               id: true,
               serialNumber: true,
-              condition: true
-            }
+              condition: true,
+            },
           },
           employee: {
             select: {
               id: true,
               name: true,
-              empId: true
-            }
+              empId: true,
+            },
           },
           assignedBy: {
             select: {
               id: true,
-              username: true
-            }
-          }
+              username: true,
+            },
+          },
         },
-        orderBy: {
-          assignedAt: 'desc'
-        },
-        skip: (pageNumber - 1) * limitNumber,
-        take: limitNumber
+        orderBy: { assignedAt: "desc" },
+        skip,
+        take: limitNumber,
       }),
-      prisma.productAssignment.count({ where })
+      prisma.productAssignment.count({ where }),
     ]);
 
-    // Add overdue status to each assignment
-    const assignmentsWithStatus = assignments.map(assignment => ({
+    const assignmentsWithStatus = assignments.map((assignment:any) => ({
       ...assignment,
-      isOverdue: assignment.expectedReturnAt ? new Date() > assignment.expectedReturnAt : false,
-      daysOverdue: assignment.expectedReturnAt ? 
-        Math.max(0, Math.floor((Date.now() - assignment.expectedReturnAt.getTime()) / (1000 * 60 * 60 * 24))) : 0
+      isOverdue: assignment.expectedReturnAt
+        ? new Date() > assignment.expectedReturnAt
+        : false,
+      daysOverdue: assignment.expectedReturnAt
+        ? Math.max(
+            0,
+            Math.floor(
+              (Date.now() - assignment.expectedReturnAt.getTime()) /
+                (1000 * 60 * 60 * 24)
+            )
+          )
+        : 0,
     }));
 
     res.json({
@@ -333,15 +327,132 @@ export async function getActiveAssignments(req: Request, res: Response) {
         total,
         page: pageNumber,
         limit: limitNumber,
-        totalPages: Math.ceil(total / limitNumber)
-      }
+        totalPages: Math.ceil(total / limitNumber),
+      },
     });
   } catch (error) {
-    console.error('Error fetching active assignments:', error);
+    console.error("Error fetching active assignments:", error);
     throw new AppError("Failed to fetch active assignments", 500);
   }
 }
 
+export async function getAssignmentById(req: Request, res: Response) {
+  try {
+    const { id } = req.params;
+    const assignmentId = parseInt(id);
+
+    if (!id || isNaN(assignmentId)) {
+      res.status(400).json({ 
+        success: false, 
+        message: "Valid assignment ID is required" 
+      });
+      return;
+    }
+
+    console.log(`[DEBUG] Looking for assignment ID: ${assignmentId}`);
+
+    // First, check if any assignment exists with this ID (including soft-deleted ones)
+    const anyAssignment = await prisma.productAssignment.findFirst({
+      where: { id: assignmentId },
+      select: { id: true, status: true, returnedAt: true, deletedAt: true }
+    });
+
+    console.log(`[DEBUG] Found assignment:`, anyAssignment);
+
+    if (!anyAssignment) {
+      res.status(404).json({ 
+        success: false, 
+        message: `Assignment with ID ${assignmentId} does not exist in the database` 
+      });
+      return;
+    }
+
+    // Check if assignment is soft-deleted
+    if (anyAssignment.deletedAt) {
+      res.status(404).json({ 
+        success: false, 
+        message: `Assignment with ID ${assignmentId} has been deleted` 
+      });
+      return;
+    }
+
+    // Now fetch the full details (excluding soft-deleted assignments)
+    const assignment = await prisma.productAssignment.findUnique({
+      where: { 
+        id: assignmentId,
+        deletedAt: null // Only fetch non-deleted assignments
+      },
+      include: {
+        product: {
+          include: {
+            category: { select: { id: true, name: true } },
+            branch: { select: { id: true, name: true } },
+            department: { select: { id: true, name: true } }
+          }
+        },
+        inventory: {
+          select: {
+            id: true,
+            serialNumber: true,
+            condition: true,
+            purchasePrice: true,
+            location: true,
+            purchaseDate: true,
+            warrantyExpiry: true,
+            notes: true
+          }
+        },
+        employee: {
+          select: {
+            id: true,
+            name: true,
+            empId: true,
+            department: true,
+            position: true,
+            email: true,
+            branch: {
+              select: {
+                id: true,
+                name: true
+              }
+            }
+          }
+        },
+        assignedBy: {
+          select: {
+            id: true,
+            username: true,
+            role: true
+          }
+        }
+      }
+    });
+
+    console.log(`[DEBUG] Full assignment data:`, assignment);
+
+    if (!assignment) {
+      res.status(404).json({ 
+        success: false, 
+        message: "Assignment not found (unexpected error)" 
+      });
+      return;
+    }
+
+    res.json({ 
+      success: true, 
+      data: assignment 
+    });
+    return;
+  } catch (error) {
+    console.error('Error fetching assignment:', error);
+    res.status(500).json({ 
+      success: false, 
+      message: "Failed to fetch assignment details",
+      error: error instanceof Error ? error.message : undefined
+    });
+    return;
+  }
+}
 export async function getAssignmentHistory(req: Request, res: Response) {
   try {
     const { page = 1, limit = 10, fromDate, toDate, employeeId, productId } = req.query;
@@ -405,7 +516,7 @@ export async function getAssignmentHistory(req: Request, res: Response) {
     ]);
 
     // Calculate assignment duration for each record
-    const assignmentsWithDuration = assignments.map(assignment => {
+    const assignmentsWithDuration = assignments.map((assignment :any)=> {
       const assignedDate = new Date(assignment.assignedAt);
       const returnedDate = assignment.returnedAt ? new Date(assignment.returnedAt) : new Date();
       const durationDays = Math.floor((returnedDate.getTime() - assignedDate.getTime()) / (1000 * 60 * 60 * 24));
@@ -476,7 +587,7 @@ export async function getEmployeeAssignments(req: Request, res: Response) {
     });
 
     // Add status information
-    const assignmentsWithStatus = assignments.map(assignment => ({
+    const assignmentsWithStatus = assignments.map((assignment:any) => ({
       ...assignment,
       isOverdue: assignment.expectedReturnAt && !assignment.returnedAt ? 
         new Date() > assignment.expectedReturnAt : false,
@@ -580,14 +691,7 @@ export async function getProductAssignments(req: Request, res: Response) {
   } catch (error) {
     console.error('Error fetching product assignments:', error);
     
-    if (error instanceof Prisma.PrismaClientKnownRequestError) {
-      res.status(400).json({ 
-        success: false, 
-        message: "Invalid product ID format" 
-      });
-      return;
-    }
-    
+  
     res.status(500).json({ 
       success: false, 
       message: "Failed to fetch product assignments",
@@ -606,7 +710,7 @@ export async function getAssignmentAnalytics(req: Request, res: Response) {
     if (fromDate) dateFilter.gte = new Date(fromDate as string);
     if (toDate) dateFilter.lte = new Date(toDate as string);
 
-    const analytics = await prisma.$transaction(async (tx) => {
+    const analytics = await prisma.$transaction(async (tx:any) => {
       // Total assignments in period
       const totalAssignments = await tx.productAssignment.count({
         where: fromDate || toDate ? { assignedAt: dateFilter } : undefined
@@ -649,8 +753,8 @@ export async function getAssignmentAnalytics(req: Request, res: Response) {
         overdueAssignments,
         returnRate: totalAssignments > 0 ? 
           ((totalAssignments - activeAssignments) / totalAssignments * 100).toFixed(2) : '0',
-        topEmployees: topEmployees.map(e => ({ employeeId: e.employeeId, count: e._count.id })),
-        topProducts: topProducts.map(p => ({ productId: p.productId, count: p._count.id }))
+        topEmployees: topEmployees.map((e:any) => ({ employeeId: e.employeeId, count: e._count.id })),
+        topProducts: topProducts.map((p:any) => ({ productId: p.productId, count: p._count.id }))
       };
     });
 
@@ -716,7 +820,7 @@ export async function generateAssignmentQr(req: Request, res: Response) {
 }
   
 
-  export async function exportAssignmentsToExcel(req: Request, res: Response) {
+ export async function exportAssignmentsToExcel(req: Request, res: Response) {
   try {
     const {
       fromDate,
@@ -813,7 +917,7 @@ export async function generateAssignmentQr(req: Request, res: Response) {
     const workbook = new ExcelJS.Workbook();
     const worksheet = workbook.addWorksheet('Product Assignments');
 
-    // Set up columns
+    // Set up columns (with PC Name added)
     worksheet.columns = [
       { header: 'Assignment ID', key: 'id', width: 15 },
       { header: 'Product Name', key: 'productName', width: 25 },
@@ -826,6 +930,7 @@ export async function generateAssignmentQr(req: Request, res: Response) {
       { header: 'Employee ID', key: 'employeeId', width: 15 },
       { header: 'Employee Position', key: 'employeePosition', width: 20 },
       { header: 'Employee Department', key: 'employeeDepartment', width: 20 },
+      { header: 'PC Name', key: 'pcName', width: 20 }, // New column
       { header: 'Assigned By', key: 'assignedBy', width: 15 },
       { header: 'Assigned Date', key: 'assignedAt', width: 15 },
       { header: 'Expected Return', key: 'expectedReturnAt', width: 15 },
@@ -849,7 +954,7 @@ export async function generateAssignmentQr(req: Request, res: Response) {
     };
 
     // Add data rows
-    assignments.forEach(assignment => {
+    assignments.forEach((assignment:any) => {
       const assignedDate = new Date(assignment.assignedAt);
       const returnedDate = assignment.returnedAt ? new Date(assignment.returnedAt) : null;
       const expectedDate = assignment.expectedReturnAt ? new Date(assignment.expectedReturnAt) : null;
@@ -878,6 +983,7 @@ export async function generateAssignmentQr(req: Request, res: Response) {
         employeeId: assignment.employee.empId,
         employeePosition: assignment.employee.position || 'N/A',
         employeeDepartment: assignment.employee.department || 'N/A',
+        pcName: assignment.pcName || 'N/A', // PC Name column
         assignedBy: assignment.assignedBy.username,
         assignedAt: assignedDate.toLocaleDateString(),
         expectedReturnAt: expectedDate?.toLocaleDateString() || 'N/A',
@@ -885,7 +991,7 @@ export async function generateAssignmentQr(req: Request, res: Response) {
         status: assignment.status,
         returnCondition: assignment.returnCondition || 'N/A',
         itemCondition: assignment.inventory.condition,
-        purchasePrice: assignment.inventory.purchasePrice ? `$${assignment.inventory.purchasePrice}` : 'N/A',
+        purchasePrice: assignment.inventory.purchasePrice ? `${assignment.inventory.purchasePrice}` : 'N/A',
         location: assignment.inventory.location || 'N/A',
         duration: durationDays,
         overdueStatus,
@@ -897,9 +1003,9 @@ export async function generateAssignmentQr(req: Request, res: Response) {
     worksheet.addRow([]);
     worksheet.addRow(['SUMMARY']);
     worksheet.addRow(['Total Assignments:', assignments.length]);
-    worksheet.addRow(['Active Assignments:', assignments.filter(a => !a.returnedAt).length]);
-    worksheet.addRow(['Returned Assignments:', assignments.filter(a => a.returnedAt).length]);
-    worksheet.addRow(['Overdue Assignments:', assignments.filter(a => !a.returnedAt && a.expectedReturnAt && new Date() > new Date(a.expectedReturnAt)).length]);
+    worksheet.addRow(['Active Assignments:', assignments.filter((a:any) => !a.returnedAt).length]);
+    worksheet.addRow(['Returned Assignments:', assignments.filter((a:any) => a.returnedAt).length]);
+    worksheet.addRow(['Overdue Assignments:', assignments.filter((a:any) => !a.returnedAt && a.expectedReturnAt && new Date() > new Date(a.expectedReturnAt)).length]);
 
     // Style summary section
     const summaryStartRow = worksheet.rowCount - 4;
@@ -937,4 +1043,4 @@ export async function generateAssignmentQr(req: Request, res: Response) {
       error: error instanceof Error ? error.message : undefined
     });
   }
-  }
+}

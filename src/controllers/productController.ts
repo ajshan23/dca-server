@@ -44,7 +44,7 @@ export async function createProduct(req: Request, res: Response) {
     }
 
     // Create product with initial inventory
-    const result = await prisma.$transaction(async (tx) => {
+    const result = await prisma.$transaction(async (tx:any) => {
       // Create product template
       const product = await tx.product.create({
         data: {
@@ -124,70 +124,80 @@ export async function createProduct(req: Request, res: Response) {
   }
 }
 
-// Get all products with stock information
 export async function getAllProducts(req: Request, res: Response) {
   try {
     const {
-      page = 1,
-      limit = 10,
+      page = "1",
+      limit = "10",
       search,
       categoryId,
       branchId,
       departmentId,
       complianceStatus,
-      stockStatus // NEW: Filter by stock status (low, out, available)
+      stockStatus // Filter by stock status (low, out, available)
     } = req.query;
 
-    const where: any = { deletedAt: null };
+    const where: any = { deletedAt: null }; // Soft delete filter
 
     if (search) {
       where.OR = [
-        { name: { contains: search as string, mode: 'insensitive' } },
-        { model: { contains: search as string, mode: 'insensitive' } }
+        { name: { contains: search as string } },
+        { model: { contains: search as string } }
       ];
     }
     if (categoryId) where.categoryId = parseInt(categoryId as string);
     if (branchId) where.branchId = parseInt(branchId as string);
     if (departmentId) where.departmentId = parseInt(departmentId as string);
-    if (complianceStatus) where.complianceStatus = complianceStatus === 'true';
+    if (complianceStatus) where.complianceStatus = complianceStatus === "true";
 
-    const [products, total] = await Promise.all([
-      prisma.product.findMany({
-        skip: (Number(page) - 1) * Number(limit),
-        take: Number(limit),
-        where,
-        include: {
-          category: { select: { id: true, name: true } },
-          branch: { select: { id: true, name: true } },
-          department: { select: { id: true, name: true } },
-          inventory: {
-            select: {
-              id: true,
-              status: true,
-              condition: true,
-              serialNumber: true
-            }
-          },
-          _count: {
-            select: {
-              inventory: true,
-              assignments: {
-                where: { returnedAt: null }
-              }
-            }
+    const pageNum = parseInt(page as string, 10) || 1;
+    const pageSize = parseInt(limit as string, 10) || 10;
+    const skip = (pageNum - 1) * pageSize;
+
+    // ✅ First, get all products with their stock info to apply stock filtering
+    const allProductsForFiltering = await prisma.product.findMany({
+      where,
+      include: {
+        category: { select: { id: true, name: true } },
+        branch: { select: { id: true, name: true } },
+        department: { select: { id: true, name: true } },
+        inventory: {
+          where: { deletedAt: null },
+          select: {
+            id: true,
+            status: true,
+            condition: true,
+            serialNumber: true
           }
         },
-        orderBy: { createdAt: 'desc' }
-      }),
-      prisma.product.count({ where })
-    ]);
+        _count: {
+          select: {
+            inventory: {
+              where: { deletedAt: null }
+            },
+            assignments: {
+              where: { returnedAt: null, deletedAt: null }
+            }
+          }
+        }
+      },
+      orderBy: { createdAt: "desc" }
+    });
 
-    const transformedProducts = products.map(product => {
+    // ✅ Transform products with stock info
+    const transformedProducts = allProductsForFiltering.map((product:any) => {
       const totalStock = product.inventory.length;
-      const availableStock = product.inventory.filter(item => item.status === 'AVAILABLE').length;
+      const availableStock = product.inventory.filter((item:any) => item.status === "AVAILABLE").length;
       const assignedStock = product._count.assignments;
-      const damagedStock = product.inventory.filter(item => item.status === 'DAMAGED').length;
-      const maintenanceStock = product.inventory.filter(item => item.status === 'MAINTENANCE').length;
+      const damagedStock = product.inventory.filter((item:any) => item.status === "DAMAGED").length;
+      const maintenanceStock = product.inventory.filter((item:any) => item.status === "MAINTENANCE").length;
+
+      const stockStatusValue = 
+        availableStock === 0
+          ? "OUT_OF_STOCK"
+          : availableStock <= product.minStockLevel
+          ? "LOW_STOCK"
+          : "AVAILABLE";
 
       return {
         ...product,
@@ -197,40 +207,44 @@ export async function getAllProducts(req: Request, res: Response) {
           assignedStock,
           damagedStock,
           maintenanceStock,
-          stockStatus: availableStock === 0 ? 'OUT_OF_STOCK' :
-            availableStock <= product.minStockLevel ? 'LOW_STOCK' : 'AVAILABLE'
+          stockStatus: stockStatusValue
         }
       };
     });
 
-    // Filter by stock status if requested
+    // ✅ Apply stock status filter BEFORE pagination
     let filteredProducts = transformedProducts;
     if (stockStatus) {
-      filteredProducts = transformedProducts.filter(product => {
+      filteredProducts = transformedProducts.filter((product:any) => {
         switch (stockStatus) {
-          case 'low':
-            return product.stockInfo.stockStatus === 'LOW_STOCK';
-          case 'out':
-            return product.stockInfo.stockStatus === 'OUT_OF_STOCK';
-          case 'available':
-            return product.stockInfo.stockStatus === 'AVAILABLE';
+          case "low":
+            return product.stockInfo.stockStatus === "LOW_STOCK";
+          case "out":
+            return product.stockInfo.stockStatus === "OUT_OF_STOCK";
+          case "available":
+            return product.stockInfo.stockStatus === "AVAILABLE";
           default:
             return true;
         }
       });
     }
 
+    // ✅ Apply pagination to filtered results
+    const total = filteredProducts.length;
+    const paginatedProducts = filteredProducts.slice(skip, skip + pageSize);
+
     res.json({
       success: true,
-      data: filteredProducts,
+      data: paginatedProducts,
       pagination: {
         total,
-        page: Number(page),
-        limit: Number(limit),
-        totalPages: Math.ceil(total / Number(limit))
+        page: pageNum,
+        limit: pageSize,
+        totalPages: Math.ceil(total / pageSize)
       }
     });
   } catch (error) {
+    console.error("Error fetching products:", error);
     throw new AppError("Failed to fetch products", 500);
   }
 }
@@ -293,11 +307,11 @@ export async function getProductById(req: Request, res: Response) {
     // Calculate stock statistics (now excludes deleted items)
     const stockStats = {
       totalStock: product.inventory.length,
-      availableStock: product.inventory.filter(item => item.status === 'AVAILABLE').length,
-      assignedStock: product.inventory.filter(item => item.status === 'ASSIGNED').length,
-      damagedStock: product.inventory.filter(item => item.status === 'DAMAGED').length,
-      maintenanceStock: product.inventory.filter(item => item.status === 'MAINTENANCE').length,
-      retiredStock: product.inventory.filter(item => item.status === 'RETIRED').length
+      availableStock: product.inventory.filter((item:any) => item.status === 'AVAILABLE').length,
+      assignedStock: product.inventory.filter((item:any) => item.status === 'ASSIGNED').length,
+      damagedStock: product.inventory.filter((item:any) => item.status === 'DAMAGED').length,
+      maintenanceStock: product.inventory.filter((item:any) => item.status === 'MAINTENANCE').length,
+      retiredStock: product.inventory.filter((item:any) => item.status === 'RETIRED').length
     };
 
     res.json({ success: true, data: { ...product, stockStats } });
@@ -326,7 +340,7 @@ export async function addStock(req: Request, res: Response) {
 
     if (!product) throw new AppError("Product not found", 404);
 
-    const result = await prisma.$transaction(async (tx) => {
+    const result = await prisma.$transaction(async (tx:any) => {
       const inventoryItems = [];
 
       for (let i = 0; i < quantity; i++) {
@@ -411,7 +425,7 @@ export async function updateInventoryItem(req: Request, res: Response) {
       throw new AppError("Cannot change status of assigned item", 400);
     }
 
-    const updatedItem = await prisma.$transaction(async (tx) => {
+    const updatedItem = await prisma.$transaction(async (tx:any) => {
       const updated = await tx.productInventory.update({
         where: { id: parseInt(inventoryId) },
         data: {
@@ -503,7 +517,7 @@ export async function deleteInventoryItem(req: Request, res: Response) {
     }
 
     // Permanently delete in transaction
-    await prisma.$transaction(async (tx) => {
+    await prisma.$transaction(async (tx:any) => {
       // Delete related records first (foreign key constraints)
       await tx.stockTransaction.deleteMany({
         where: { inventoryId: parseInt(inventoryId) }
@@ -729,7 +743,7 @@ export async function deleteProduct(req: Request, res: Response) {
       throw new AppError("Cannot delete product with active assignments", 400);
     }
 
-    await prisma.$transaction(async (tx) => {
+    await prisma.$transaction(async (tx:any) => {
       // Soft delete all inventory items
       await tx.productInventory.updateMany({
         where: { productId: parseInt(id) },
@@ -782,7 +796,7 @@ export async function getAssignedProducts(_req: Request, res: Response) {
 // New function to get stock dashboard/summary
 export async function getStockSummary(_req: Request, res: Response) {
   try {
-    const summary = await prisma.$transaction(async (tx) => {
+    const summary = await prisma.$transaction(async (tx: any) => {
       // Get total products
       const totalProducts = await tx.product.count({
         where: { deletedAt: null }
@@ -800,40 +814,60 @@ export async function getStockSummary(_req: Request, res: Response) {
         _count: { id: true }
       });
 
-      // Get low stock products
-      const lowStockProducts = await tx.product.findMany({
-        where: {
-          deletedAt: null,
-          inventory: {
-            some: { 
-              status: 'AVAILABLE',
-              deletedAt: null 
-            }
-          }
-        },
-        include: {
-          _count: {
-            select: {
-              inventory: { 
-                where: { 
-                  status: 'AVAILABLE',
-                  deletedAt: null 
-                } 
-              }
-            }
-          }
-        }
-      });
+      // Get stock by category using raw SQL
+      const categoryStockRaw: any[] = await tx.$queryRaw`
+        SELECT 
+          c.id as categoryId,
+          c.name as categoryName,
+          COUNT(DISTINCT p.id) as productCount,
+          COUNT(CASE WHEN pi.status = 'AVAILABLE' AND pi.deletedAt IS NULL THEN pi.id END) as availableStock
+        FROM categories c
+        LEFT JOIN products p ON p.categoryId = c.id AND p.deletedAt IS NULL
+        LEFT JOIN product_inventory pi ON pi.productId = p.id
+        WHERE c.deletedAt IS NULL
+        GROUP BY c.id, c.name
+      `;
 
-      const actualLowStock = lowStockProducts.filter(
-        product => product._count.inventory <= product.minStockLevel
-      );
+      const stockByCategory = categoryStockRaw.map(item => ({
+        categoryId: Number(item.categoryId),
+        categoryName: item.categoryName,
+        productCount: Number(item.productCount),
+        availableStock: Number(item.availableStock)
+      }));
 
-      // Get recent transactions - filter by non-deleted inventory
+      // Get low stock products using raw SQL
+      const lowStockProductsRaw: any[] = await tx.$queryRaw`
+        SELECT 
+          p.id,
+          p.name,
+          p.model,
+          p.minStockLevel,
+          c.name as categoryName,
+          COUNT(CASE WHEN pi.status = 'AVAILABLE' AND pi.deletedAt IS NULL THEN pi.id END) as currentStock
+        FROM products p
+        JOIN categories c ON p.categoryId = c.id
+        LEFT JOIN product_inventory pi ON pi.productId = p.id
+        WHERE p.deletedAt IS NULL 
+          AND c.deletedAt IS NULL
+        GROUP BY p.id, p.name, p.model, p.minStockLevel, c.name
+        HAVING currentStock <= p.minStockLevel
+      `;
+
+      const actualLowStock = lowStockProductsRaw.map(item => ({
+        id: Number(item.id),
+        name: item.name,
+        model: item.model,
+        category: item.categoryName,
+        currentStock: Number(item.currentStock),
+        minStock: Number(item.minStockLevel)
+      }));
+
+      // Get recent transactions - FIXED: Use userId instead of user relation
       const recentTransactions = await tx.stockTransaction.findMany({
         take: 10,
         orderBy: { createdAt: 'desc' },
         where: {
+          deletedAt: null,
           inventory: {
             deletedAt: null,
             product: {
@@ -841,36 +875,71 @@ export async function getStockSummary(_req: Request, res: Response) {
             }
           }
         },
-        include: {
+        select: {
+          id: true,
+          type: true,
+          reason: true,
+          createdAt: true,
+          userId: true, // Get the user ID instead of user relation
           inventory: {
-            include: {
-              product: { 
-                select: { 
-                  name: true, 
-                  model: true 
-                } 
+            select: {
+              id: true,
+              product: {
+                select: {
+                  name: true,
+                  model: true,
+                  category: {
+                    select: {
+                      name: true
+                    }
+                  }
+                }
               }
             }
           }
         }
       });
 
+      // Get usernames for the transactions
+      const userIds = recentTransactions.map((t:any) => t.userId).filter(Boolean);
+      const users = userIds.length > 0 ? await tx.user.findMany({
+        where: { id: { in: userIds } },
+        select: { id: true, username: true }
+      }) : [];
+
+      // Map usernames to transactions
+      const transactionsWithUsers = recentTransactions.map((transaction:any) => {
+        const user = users.find((u :any)=> u.id === transaction.userId);
+        return {
+          ...transaction,
+          performedBy: user?.username || 'System'
+        };
+      });
+
       return {
         totalProducts,
         totalInventory,
-        stockByStatus: stockByStatus.reduce((acc, item) => {
+        stockByStatus: stockByStatus.reduce((acc: any, item: any) => {
           acc[item.status] = item._count.id;
           return acc;
         }, {} as Record<string, number>),
+        stockByCategory,
         lowStockCount: actualLowStock.length,
-        lowStockProducts: actualLowStock.map(p => ({
-          id: p.id,
-          name: p.name,
-          model: p.model,
-          currentStock: p._count.inventory,
-          minStock: p.minStockLevel
-        })),
-        recentTransactions
+        lowStockProducts: actualLowStock,
+        recentTransactions: transactionsWithUsers.map((t: any) => ({
+          id: t.id,
+          type: t.type,
+          reason: t.reason,
+          createdAt: t.createdAt,
+          performedBy: t.performedBy,
+          inventory: {
+            product: {
+              name: t.inventory.product.name,
+              model: t.inventory.product.model,
+              category: t.inventory.product.category.name
+            }
+          }
+        }))
       };
     });
 
@@ -966,13 +1035,13 @@ export async function exportProductsToExcel(req: Request, res: Response) {
     });
 
     // Transform products with stock info and filter by stock status
-    let transformedProducts = products.map(product => {
+    let transformedProducts = products.map((product:any) => {
       const totalStock = product.inventory.length;
-      const availableStock = product.inventory.filter(item => item.status === 'AVAILABLE').length;
+      const availableStock = product.inventory.filter((item:any) => item.status === 'AVAILABLE').length;
       const assignedStock = product._count.assignments;
-      const damagedStock = product.inventory.filter(item => item.status === 'DAMAGED').length;
-      const maintenanceStock = product.inventory.filter(item => item.status === 'MAINTENANCE').length;
-      const retiredStock = product.inventory.filter(item => item.status === 'RETIRED').length;
+      const damagedStock = product.inventory.filter((item:any) => item.status === 'DAMAGED').length;
+      const maintenanceStock = product.inventory.filter((item:any) => item.status === 'MAINTENANCE').length;
+      const retiredStock = product.inventory.filter((item:any) => item.status === 'RETIRED').length;
 
       const stockStatusValue = availableStock === 0 ? 'OUT_OF_STOCK' :
         availableStock <= product.minStockLevel ? 'LOW_STOCK' : 'AVAILABLE';
@@ -993,7 +1062,7 @@ export async function exportProductsToExcel(req: Request, res: Response) {
 
     // Filter by stock status if specified
     if (stockStatus) {
-      transformedProducts = transformedProducts.filter(product => {
+      transformedProducts = transformedProducts.filter((product:any) => {
         switch (stockStatus) {
           case 'low':
             return product.stockInfo.stockStatus === 'LOW_STOCK';
@@ -1043,7 +1112,7 @@ export async function exportProductsToExcel(req: Request, res: Response) {
     };
 
     // Add product data
-    transformedProducts.forEach(product => {
+    transformedProducts.forEach((product:any) => {
       productsSheet.addRow({
         id: product.id,
         name: product.name,
@@ -1092,8 +1161,8 @@ export async function exportProductsToExcel(req: Request, res: Response) {
       };
 
       // Add inventory data
-      transformedProducts.forEach(product => {
-        product.inventory.forEach(item => {
+      transformedProducts.forEach((product:any) => {
+        product.inventory.forEach((item:any) => {
           inventorySheet.addRow({
             inventoryId: item.id,
             productName: product.name,
@@ -1157,22 +1226,22 @@ export async function bulkDeleteInventoryItems(req: Request, res: Response) {
 
     // Check if all items exist
     if (inventoryItems.length !== numericIds.length) {
-      const foundIds = inventoryItems.map(item => item.id);
+      const foundIds = inventoryItems.map((item:any) => item.id);
       const missingIds = numericIds.filter(id => !foundIds.includes(id));
       throw new AppError(`Inventory items not found: ${missingIds.join(', ')}`, 404);
     }
 
     // Check for assigned items
-    const assignedItems = inventoryItems.filter(item => item.assignments.length > 0);
+    const assignedItems = inventoryItems.filter((item:any) => item.assignments.length > 0);
     if (assignedItems.length > 0) {
       throw new AppError(
-        `Cannot delete assigned items: ${assignedItems.map(item => item.id).join(', ')}`, 
+        `Cannot delete assigned items: ${assignedItems.map((item:any) => item.id).join(', ')}`, 
         400
       );
     }
 
     // Permanently delete all items in transaction (exactly like single delete)
-    await prisma.$transaction(async (tx) => {
+    await prisma.$transaction(async (tx:any) => {
       // Delete related stock transactions
       await tx.stockTransaction.deleteMany({
         where: { inventoryId: { in: numericIds } }

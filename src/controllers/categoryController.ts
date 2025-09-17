@@ -35,41 +35,56 @@ export async function createCategory(req: Request, res: Response) {
 
 export async function getAllCategories(req: Request, res: Response) {
   try {
-    const { search } = req.query;
-    
+    const { search, page = "1", limit = "10" } = req.query;
+
     const where: any = { deletedAt: null };
-    
+
     if (search) {
       where.OR = [
-        { name: { contains: search as string, mode: 'insensitive' } },
-        { description: { contains: search as string, mode: 'insensitive' } }
+        { name: { contains: search as string } },
+        { description: { contains: search as string } }
       ];
     }
 
-    const categories = await prisma.category.findMany({
-      where,
-      select: {
-        id: true,
-        name: true,
-        description: true,
-        createdAt: true,
-        _count: {
-          select: {
-            products: true
-          }
-        }
-      },
-      orderBy: {
-        name: 'asc'
-      }
-    });
+    const pageNum = parseInt(page as string, 10) || 1;
+    const pageSize = parseInt(limit as string, 10) || 10;
+    const skip = (pageNum - 1) * pageSize;
 
-    res.json({ success: true, data: categories });
+    const [categories, total] = await Promise.all([
+      prisma.category.findMany({
+        where,
+        skip,
+        take: pageSize,
+        select: {
+          id: true,
+          name: true,
+          description: true,
+          createdAt: true,
+          _count: {
+            select: {
+              products: true
+            }
+          }
+        },
+        orderBy: {
+          name: "asc"
+        }
+      }),
+      prisma.category.count({ where })
+    ]);
+
+    res.json({
+      success: true,
+      data: categories,
+      total,
+      page: pageNum,
+      limit: pageSize
+    });
   } catch (error) {
+    console.error("Error fetching categories:", error);
     throw new AppError("Failed to fetch categories", 500);
   }
 }
-
 export async function getCategoryById(req: Request, res: Response) {
   try {
     const category = await prisma.category.findUnique({

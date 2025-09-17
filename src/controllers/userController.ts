@@ -7,48 +7,70 @@ const BCRYPT_SALT_ROUNDS = 12;
 
 export async function getAllUsers(req: Request, res: Response) {
   try {
-    const { page = 1, limit = 10, search } = req.query;
-    
-    const where: any = { deletedAt: null };
-    
+    console.log("=== Get All Users Request Received ===");
+
+    const { page = "1", limit = "10", search } = req.query;
+
+    const pageNumber = Math.max(Number(page), 1);
+    const limitNumber = Math.max(Number(limit), 1);
+
+    console.log("Query Params:", { page: pageNumber, limit: limitNumber, search });
+
+    let where: any = { deletedAt: null };
+
     if (search) {
-      where.username = { contains: search as string, mode: 'insensitive' };
+      // Case-insensitive fallback for Prisma without `mode`
+      where = {
+        ...where,
+        username: {
+          contains: String(search).toLowerCase(),
+        },
+      };
     }
 
     const [users, total] = await Promise.all([
       prisma.user.findMany({
-        skip: (Number(page) - 1) * Number(limit),
-        take: Number(limit),
+        skip: (pageNumber - 1) * limitNumber,
+        take: limitNumber,
         where,
         select: {
           id: true,
           username: true,
           role: true,
           createdAt: true,
-          updatedAt: true
+          updatedAt: true,
         },
-        orderBy: {
-          username: 'asc'
-        }
+        orderBy: { username: "asc" },
       }),
-      prisma.user.count({ where })
+      prisma.user.count({ where }),
     ]);
 
-    res.json({
+    const response = {
       success: true,
       data: users,
       pagination: {
         total,
-        page: Number(page),
-        limit: Number(limit),
-        totalPages: Math.ceil(total / Number(limit))
-      }
+        page: pageNumber,
+        limit: limitNumber,
+        totalPages: Math.ceil(total / limitNumber),
+      },
+    };
+
+    console.log("=== Get All Users Success ===", {
+      total: response.pagination.total,
+      page: response.pagination.page,
     });
-  } catch (error) {
-    throw new AppError("Failed to fetch users", 500);
+
+    res.json(response);
+  } catch (error: any) {
+    console.error("=== Get All Users Error ===", error);
+    res.status(500).json({
+      success: false,
+      message: "Failed to fetch users",
+      error: error.message || error,
+    });
   }
 }
-
 export async function getCurrentUser(req: Request, res: Response) {
   try {
     if (!req.user) throw new AppError("Authentication required", 401);
